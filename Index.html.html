@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GridLock: Rotate Puzzle</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 16px;
+            color: #1f2937;
+            user-select: none;
+            touch-action: none; 
+        }
+
+        #gameContainer {
+            position: relative;
+            background-color: #ffffff; 
+            border: 4px solid #4f46e5;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            touch-action: manipulation;
+        }
+
+        #gameCanvas {
+            display: block;
+        }
+
+        .ui-panel {
+            background-color: #4f46e5;
+            border-radius: 8px;
+            color: #ffffff;
+            font-weight: 600;
+        }
+        
+        #messageOverlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.95);
+            color: #1f2937;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            transition: opacity 0.3s;
+        }
+
+        .tap-button {
+            transition: transform 0.1s;
+            box-shadow: 0 5px 15px rgba(79, 70, 229, 0.4);
+        }
+        .tap-button:active {
+            transform: scale(0.95);
+            box-shadow: 0 2px 10px rgba(79, 70, 229, 0.6);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="flex flex-col items-center w-full max-w-sm">
+        <h1 class="text-3xl font-extrabold text-[#4f46e5] mb-4 text-center">GridLock: Rotate Puzzle</h1>
+
+        <div id="gameContainer" class="w-full" style="aspect-ratio: 1/1;">
+            <canvas id="gameCanvas" width="360" height="360"></canvas>
+            
+            <div id="messageOverlay">
+                <div id="messageBox" class="p-8 bg-white rounded-xl shadow-2xl border-2 border-[#4f46e5] text-center">
+                    <h2 class="text-3xl font-bold text-[#4f46e5] mb-3">GridLock: Rotate Puzzle</h2>
+                    <p class="text-sm text-gray-600 mb-6">Tap any 2x2 section to rotate it and match the colored target pattern!</p>
+                    <button id="startButton" class="tap-button bg-[#4f46e5] hover:bg-[#6366f1] text-white py-3 px-8 rounded-full font-bold shadow-lg">
+                        START PUZZLE
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="ui-panel mt-4 p-3 w-full flex justify-between items-center text-lg shadow-md">
+            <div>Level: <span id="levelDisplay" class="text-[#facc15] font-bold">1</span></div>
+            <div>Moves: <span id="movesDisplay" class="text-[#facc15] font-bold">0</span></div>
+            <div class="flex items-center">Time: <span id="timeDisplay" class="text-[#10b981] font-bold ml-1">300.0s</span></div>
+        </div>
+
+        <!-- Copyright Footer -->
+        <div class="mt-4 text-xs text-gray-500 text-center">
+            &copy; 2025 The Dream Forge Studio. All rights reserved.
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const messageOverlay = document.getElementById('messageOverlay');
+        const messageBox = document.getElementById('messageOverlay').querySelector('#messageBox');
+        const startButton = document.getElementById('startButton');
+        const levelDisplay = document.getElementById('levelDisplay');
+        const timeDisplay = document.getElementById('timeDisplay');
+        const movesDisplay = document.getElementById('movesDisplay');
+        const CANVAS_WIDTH = canvas.width;
+
+        // Game Constants
+        const COLORS = {
+            RED: '#ef4444',
+            BLUE: '#3b82f6',
+            YELLOW: '#facc15',
+            GREEN: '#10b981',
+            BACKGROUND: '#ffffff',
+            WIN_FLASH: '#10b981' // Green for win feedback
+        };
+        const COLOR_NAMES = [COLORS.RED, COLORS.BLUE, COLORS.YELLOW, COLORS.GREEN];
+
+        // Game State
+        let gameState = {
+            running: false,
+            level: 1,
+            currentGridSize: 3, 
+            currentBlockSize: CANVAS_WIDTH / 3,
+            puzzleGrid: [],
+            targetGrid: [],
+            timeRemaining: 300, 
+            timeElapsed: 0, 
+            moves: 0,
+            timerInterval: null,
+            animationId: null,
+
+            // Animation state for rotations
+            isAnimating: false,
+            animationStart: 0,
+            animationDuration: 200, // ms for 90-degree rotation
+            rotatedBlock: null, // { r: startRow, c: startCol, preGrid: grid, postGrid: grid }
+            
+            // Win state
+            isWinFlashing: false,
+            winFlashStart: 0,
+            winFlashDuration: 500, // ms for flash
+        };
+
+        // --- Utility Functions ---
+
+        function createGrid(size) {
+            const grid = [];
+            for (let i = 0; i < size; i++) {
+                grid[i] = [];
+                for (let j = 0; j < size; j++) {
+                    grid[i][j] = COLOR_NAMES[Math.floor(Math.random() * COLOR_NAMES.length)];
+                }
+            }
+            return grid;
+        }
+
+        // Deep copy a grid
+        function copyGrid(grid) {
+            return grid.map(row => [...row]);
+        }
+
+        // --- Game Initialization and Reset ---
+
+        function setupLevel() {
+            // 1. Determine size and difficulty based on level
+            if (gameState.level === 1) {
+                gameState.currentGridSize = 3;
+                gameState.timeRemaining = 300; 
+                var scrambleSteps = 6; 
+                var levelText = "Level 1 (3x3 Grid)";
+            } else if (gameState.level === 2) {
+                gameState.currentGridSize = 4;
+                gameState.timeRemaining = 280; 
+                var scrambleSteps = 15;
+                var levelText = "Level 2 (4x4 Grid)";
+            } else {
+                // Scalable difficulty for future levels
+                gameState.currentGridSize = 4;
+                gameState.timeRemaining = 280 - Math.min(275, (gameState.level - 2) * 5);
+                var scrambleSteps = 15 + (gameState.level - 2) * 5;
+                var levelText = `Level ${gameState.level} (4x4 Grid)`;
+            }
+            
+            gameState.currentBlockSize = CANVAS_WIDTH / gameState.currentGridSize;
+
+            // 2. Create a base target pattern
+            gameState.targetGrid = createGrid(gameState.currentGridSize);
+            
+            // 3. Create the puzzle grid by copying the target
+            gameState.puzzleGrid = copyGrid(gameState.targetGrid);
+
+            // 4. Scramble the puzzle grid using valid rotations
+            for (let i = 0; i < scrambleSteps; i++) { 
+                const maxIndex = gameState.currentGridSize - 1;
+                const startRow = Math.floor(Math.random() * maxIndex);
+                const startCol = Math.floor(Math.random() * maxIndex);
+                applyRotation(gameState.puzzleGrid, startRow, startCol, 1); // Use direct rotation for scrambling
+            }
+
+            // 5. Update UI
+            levelDisplay.textContent = levelText;
+            timeDisplay.textContent = `${gameState.timeRemaining.toFixed(1)}s`;
+            movesDisplay.textContent = gameState.moves;
+
+            // Reset animation state
+            gameState.isAnimating = false;
+            gameState.rotatedBlock = null;
+            gameState.isWinFlashing = false;
+        }
+
+        function startGame() {
+            // Reset ALL state
+            cancelAnimationFrame(gameState.animationId);
+            if (gameState.timerInterval) clearInterval(gameState.timerInterval);
+            
+            gameState.running = true;
+            gameState.level = 1;
+            gameState.moves = 0;
+            gameState.timeElapsed = 0;
+
+            setupLevel();
+
+            // Update UI and hide overlay
+            messageOverlay.style.opacity = '0';
+            messageOverlay.style.pointerEvents = 'none';
+
+            startTimer();
+
+            // Start loop
+            gameState.animationId = requestAnimationFrame(gameLoop);
+        }
+
+        function advanceLevel() {
+            // Initiate win flash and stop game/timer momentarily
+            gameState.running = false;
+            if (gameState.timerInterval) clearInterval(gameState.timerInterval);
+            
+            gameState.isWinFlashing = true;
+            gameState.winFlashStart = performance.now();
+            
+            // Wait for the flash animation to finish before showing the next level screen
+            setTimeout(() => {
+                gameState.isWinFlashing = false;
+
+                // Check for final win condition (after level 2)
+                if (gameState.level >= 2) {
+                    gameOver("PUZZLE MASTER!");
+                    return;
+                }
+
+                gameState.level++;
+                setupLevel();
+
+                messageBox.innerHTML = `
+                    <h2 class="text-3xl font-bold text-[#10b981] mb-3">LEVEL ${gameState.level - 1} CLEARED!</h2>
+                    <p class="text-gray-600 mb-6">Next up: The challenge jumps to a ${gameState.currentGridSize}x${gameState.currentGridSize} grid!</p>
+                    <button id="nextLevelButton" class="tap-button bg-[#4f46e5] hover:bg-[#6366f1] text-white py-3 px-8 rounded-full font-bold shadow-lg transition duration-150">
+                        START LEVEL ${gameState.level}
+                    </button>
+                `;
+                document.getElementById('nextLevelButton').addEventListener('click', () => {
+                    startTimer();
+                    gameState.running = true;
+                    messageOverlay.style.opacity = '0';
+                    messageOverlay.style.pointerEvents = 'none';
+                    gameState.animationId = requestAnimationFrame(gameLoop);
+                });
+                messageOverlay.style.opacity = '1';
+                messageOverlay.style.pointerEvents = 'auto';
+
+            }, gameState.winFlashDuration);
+        }
+
+        function startTimer() {
+            if (gameState.timerInterval) clearInterval(gameState.timerInterval);
+            let lastUpdate = performance.now();
+            
+            gameState.timerInterval = setInterval(() => {
+                if (!gameState.running) return;
+
+                const now = performance.now();
+                const delta = (now - lastUpdate) / 1000; // time in seconds
+                lastUpdate = now;
+
+                gameState.timeRemaining -= delta;
+                gameState.timeElapsed += delta;
+
+                timeDisplay.textContent = `${gameState.timeRemaining.toFixed(1)}s`;
+
+                if (gameState.timeRemaining <= 0) {
+                    clearInterval(gameState.timerInterval);
+                    gameOver("TIME OUT!");
+                }
+            }, 50); // High frequency for smoother time tracking
+        }
+        
+        // --- Drawing Functions ---
+
+        function clearCanvas() {
+            ctx.fillStyle = COLORS.BACKGROUND; 
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+        }
+
+        /**
+         * Draws the puzzle grid and target overlays.
+         * @param {Array<Array<string>>} grid The grid state to draw (puzzle or pre-animation).
+         * @param {object | null} excludeArea {r: startRow, c: startCol} of the 2x2 area to skip.
+         */
+        function drawGrids(grid = gameState.puzzleGrid, excludeArea = null) {
+            const size = gameState.currentGridSize;
+            const bSize = gameState.currentBlockSize;
+
+            // 1. Draw the Target Grid (The outer frame/overlay)
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    const x = j * bSize;
+                    const y = i * bSize;
+                    
+                    ctx.strokeStyle = gameState.targetGrid[i][j];
+                    ctx.lineWidth = 4;
+                    ctx.strokeRect(x + 2, y + 2, bSize - 4, bSize - 4);
+                }
+            }
+
+            // 2. Draw the Puzzle Grid (The solid, inner squares)
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    // Check if this block is part of the excluded 2x2 rotating area
+                    const isExcluded = excludeArea && 
+                                       i >= excludeArea.r && i < excludeArea.r + 2 && 
+                                       j >= excludeArea.c && j < excludeArea.c + 2;
+                    
+                    if (isExcluded) continue; // Skip drawing the rotating blocks
+
+                    const x = j * bSize;
+                    const y = i * bSize;
+
+                    ctx.fillStyle = grid[i][j];
+                    ctx.fillRect(x + 5, y + 5, bSize - 10, bSize - 10);
+                    
+                    // Add subtle grid lines for separation
+                    ctx.strokeStyle = '#e5e7eb';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(x, y, bSize, bSize);
+                }
+            }
+        }
+
+        // Draws only the 2x2 section that is actively rotating.
+        function drawRotatingBlock(progress) {
+            const { r, c, preGrid } = gameState.rotatedBlock;
+            const bSize = gameState.currentBlockSize;
+            
+            // Interpolate angle from 0 to 90 degrees clockwise (Math.PI / 2)
+            const angle = progress * (Math.PI / 2); 
+
+            // Define the center of the 2x2 block area in canvas coordinates
+            const centerX = (c * bSize) + bSize;
+            const centerY = (r * bSize) + bSize;
+
+            ctx.save();
+            ctx.translate(centerX, centerY);
+            ctx.rotate(angle);
+            
+            // Draw all 4 sub-blocks relative to the rotation center
+            for (let i = 0; i < 2; i++) {
+                for (let j = 0; j < 2; j++) {
+                    const blockRow = r + i;
+                    const blockCol = c + j;
+                    
+                    // Coordinates relative to the 2x2 center (e.g., top-left is -bSize, -bSize)
+                    const blockX = (j * bSize) - bSize;
+                    const blockY = (i * bSize) - bSize;
+
+                    // Fetch the color from the PRE-ROTATED grid state 
+                    const color = preGrid[blockRow][blockCol];
+
+                    ctx.fillStyle = color;
+                    ctx.fillRect(blockX + 5, blockY + 5, bSize - 10, bSize - 10);
+                }
+            }
+            
+            ctx.restore();
+        }
+
+        // Logic that modifies the grid data structure (no animation)
+        function applyRotation(grid, startRow, startCol, steps = 1) {
+            
+            // Get the 2x2 colors
+            const c00 = grid[startRow][startCol];
+            const c01 = grid[startRow][startCol + 1];
+            const c10 = grid[startRow + 1][startCol];
+            const c11 = grid[startRow + 1][startCol + 1];
+
+            // Perform 90-degree clockwise rotation (C00 -> C01, C01 -> C11, C11 -> C10, C10 -> C00)
+            if (steps % 4 === 1) { 
+                grid[startRow][startCol + 1] = c00;
+                grid[startRow + 1][startCol + 1] = c01;
+                grid[startRow + 1][startCol] = c11;
+                grid[startRow][startCol] = c10;
+            } else if (steps % 4 === 3 || steps % 4 === -1) {
+                // Counter-clockwise
+                grid[startRow][startCol] = c01;
+                grid[startRow][startCol + 1] = c11;
+                grid[startRow + 1][startCol + 1] = c10;
+                grid[startRow + 1][startCol] = c00;
+            }
+        }
+
+        function checkWin() {
+            const size = gameState.currentGridSize;
+            for (let i = 0; i < size; i++) {
+                for (let j = 0; j < size; j++) {
+                    if (gameState.puzzleGrid[i][j] !== gameState.targetGrid[i][j]) {
+                        console.log(`Mismatch at [Row ${i}, Col ${j}]: Puzzle: ${gameState.puzzleGrid[i][j]} | Target: ${gameState.targetGrid[i][j]}`);
+                        return false; 
+                    }
+                }
+            }
+            console.log("--- WIN CONDITION MET! All blocks matched. ---");
+            return true;
+        }
+
+        function handleTap(event) {
+            // Check if we are busy with an animation or win flash
+            if (!gameState.running || gameState.isAnimating || gameState.isWinFlashing) return;
+
+            // Get mouse/touch coordinates relative to the canvas
+            const rect = canvas.getBoundingClientRect();
+            let clientX, clientY;
+
+            if (event.touches && event.touches.length > 0) {
+                clientX = event.touches[0].clientX;
+                clientY = event.touches[0].clientY;
+            } else {
+                clientX = event.clientX;
+                clientY = event.clientY;
+            }
+            
+            const x = clientX - rect.left;
+            const y = clientY - rect.top;
+
+            const bSize = gameState.currentBlockSize;
+            const size = gameState.currentGridSize;
+
+            // Determine which 2x2 block was clicked (0-indexed)
+            const maxIndex = size - 2;
+            const startCol = Math.min(Math.floor(x / bSize), maxIndex);
+            const startRow = Math.min(Math.floor(y / bSize), maxIndex);
+            
+            // Only proceed if a valid 2x2 rotation area was clicked (1 less than grid size)
+            if (startCol >= 0 && startRow >= 0) {
+                
+                // 1. Prepare for rotation (store pre-state and calculate post-state)
+                const preRotateGrid = copyGrid(gameState.puzzleGrid);
+                const postRotateGrid = copyGrid(gameState.puzzleGrid);
+                
+                // Apply the rotation to the *copy* to get the post-state
+                applyRotation(postRotateGrid, startRow, startCol, 1);
+                
+                // 2. Setup animation state
+                gameState.isAnimating = true;
+                gameState.animationStart = performance.now();
+                gameState.rotatedBlock = {
+                    r: startRow,
+                    c: startCol,
+                    preGrid: preRotateGrid,
+                    postGrid: postRotateGrid // Store the new state
+                };
+                
+                // 3. Complete rotation after animation
+                setTimeout(() => {
+                    // Apply the final, rotated state to the main puzzle grid
+                    gameState.puzzleGrid = gameState.rotatedBlock.postGrid;
+                    gameState.isAnimating = false;
+                    gameState.rotatedBlock = null;
+                    
+                    // Increment moves and check win condition after animation
+                    gameState.moves++;
+                    movesDisplay.textContent = gameState.moves;
+
+                    if (checkWin()) {
+                        advanceLevel();
+                    }
+                }, gameState.animationDuration);
+
+                // LOGGING ACTION
+                console.log(`Starting rotation animation at R${startRow} C${startCol}`);
+            }
+        }
+
+        // --- Game Flow ---
+
+        function gameLoop(currentTime) {
+            if (!gameState.running && !gameState.isAnimating && !gameState.isWinFlashing) {
+                gameState.animationId = requestAnimationFrame(gameLoop); // Keep loop running to catch start/end conditions
+                return;
+            }
+
+            clearCanvas();
+            
+            if (gameState.isAnimating) {
+                // Calculate progress (0 to 1)
+                const elapsed = currentTime - gameState.animationStart;
+                const progress = Math.min(1, elapsed / gameState.animationDuration);
+                
+                // 1. Draw the static part of the pre-state grid (excluding the rotating area)
+                drawGrids(gameState.rotatedBlock.preGrid, { r: gameState.rotatedBlock.r, c: gameState.rotatedBlock.c }); 
+                
+                // 2. Overlay the actively rotating block
+                drawRotatingBlock(progress);
+                
+            } else if (gameState.isWinFlashing) {
+                // Flash the canvas green briefly
+                const elapsed = currentTime - gameState.winFlashStart;
+                const alpha = Math.max(0, 1 - (elapsed / gameState.winFlashDuration)); // Fade out from 1 to 0
+                
+                drawGrids(); // Draw the solved grid first
+                
+                ctx.save();
+                ctx.fillStyle = COLORS.WIN_FLASH;
+                ctx.globalAlpha = alpha;
+                ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_WIDTH);
+                ctx.restore();
+            } else {
+                // Draw the final, non-animating grid
+                drawGrids();
+            }
+            
+            gameState.animationId = requestAnimationFrame(gameLoop);
+        }
+
+        function gameOver(message) {
+            cancelAnimationFrame(gameState.animationId);
+            if (gameState.timerInterval) clearInterval(gameState.timerInterval);
+            gameState.running = false;
+            
+            // Format scores
+            const finalTime = gameState.timeElapsed.toFixed(1);
+            const finalMoves = gameState.moves;
+
+            let messageContent = ``;
+            if (message === "PUZZLE MASTER!") {
+                 messageContent = `
+                    <h2 class="text-3xl font-bold text-[#10b981] mb-3">PUZZLE MASTER!</h2>
+                    <p class="text-lg text-gray-700 mb-2">Congratulations, you solved both levels!</p>
+                    <div class="flex flex-col items-center mt-4 p-4 bg-gray-50 rounded-lg border">
+                        <p class="text-sm font-semibold text-gray-600">Total Score:</p>
+                        <p class="text-2xl font-bold text-[#4f46e5]">Time: ${finalTime}s</p>
+                        <p class="text-2xl font-bold text-[#4f46e5]">Moves: ${finalMoves}</p>
+                    </div>
+                `;
+            } else {
+                 messageContent = `
+                    <h2 class="text-3xl font-bold ${message.includes('TIME OUT') ? 'text-[#f87171]' : 'text-[#ef4444]'} mb-3">GAME OVER</h2>
+                    <p class="text-gray-600 mb-6">Final Level: <span class="text-[#4f46e5] font-bold text-2xl">${gameState.level}</span></p>
+                `;
+            }
+
+            messageBox.innerHTML = messageContent + `
+                <button id="restartButton" class="tap-button bg-[#4f46e5] hover:bg-[#6366f1] text-white py-3 px-8 rounded-full shadow-lg transition duration-150 mt-4">
+                    RESTART
+                </button>
+            `;
+            document.getElementById('restartButton').addEventListener('click', startGame);
+            messageOverlay.style.opacity = '1';
+            messageOverlay.style.pointerEvents = 'auto';
+        }
+
+        // --- Event Listeners ---
+        startButton.addEventListener('click', startGame);
+        
+        // Tap/Click handler for the game action (anywhere on the canvas)
+        canvas.addEventListener('click', handleTap);
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            handleTap(e);
+        }, { passive: false });
+
+        // Initial draw on load
+        window.onload = () => {
+            setupLevel(); // Prepare level 1 visually (3x3)
+            clearCanvas();
+            drawGrids();
+        };
+
+    </script>
+</body>
+</html>
+
+
